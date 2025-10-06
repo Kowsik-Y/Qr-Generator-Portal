@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Quiz Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .option-radio:checked + label {
+            background-color: #4f46e5;
+            color: white;
+            border-color: #4f46e5;
+        }
+        .correct-answer {
+            background-color: #dcfce7; /* green-100 */
+            border-left-color: #22c55e; /* green-500 */
+        }
+        .incorrect-answer {
+            background-color: #fee2e2; /* red-100 */
+            border-left-color: #ef4444; /* red-500 */
+        }
+        .hidden {
+            display: none;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border-left-color: #4f46e5;
+            animation: spin 1s ease infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 flex items-center justify-center min-h-screen p-4">
+
+    <div class="container mx-auto max-w-2xl w-full">
+        
+        <!-- Section 1: AI Quiz Generation -->
+        <div id="creation-view" class="bg-white p-8 rounded-xl shadow-lg transition-all">
+            <h1 class="text-4xl font-bold text-center mb-8 text-indigo-600">AI Quiz Generator</h1>
+            <div class="bg-indigo-50 p-6 rounded-lg border border-indigo-200">
+                <h2 class="text-2xl font-semibold mb-4 text-indigo-800">Generate a New Quiz</h2>
+                 <div class="mb-4">
+                    <label for="ai-topic" class="block text-sm font-medium text-gray-700 mb-1">Quiz Topic</label>
+                    <input type="text" id="ai-topic" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500" placeholder="e.g., The Roman Empire">
+                </div>
+                <div class="mb-4">
+                    <label for="ai-question-count" class="block text-sm font-medium text-gray-700 mb-1">Number of Questions</label>
+                    <input type="number" id="ai-question-count" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500" value="5" min="1" max="10">
+                </div>
+                <button id="generate-ai-btn" class="w-full flex items-center justify-center px-6 py-3 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 transition-all shadow-md">
+                    <span id="ai-btn-text">Generate & Start Quiz</span>
+                    <div id="ai-spinner" class="spinner hidden ml-3"></div>
+                </button>
+            </div>
+        </div>
+
+        <!-- Section 2: Take Quiz -->
+        <div id="quiz-view" class="hidden bg-white p-8 rounded-xl shadow-lg transition-all">
+            <h2 id="quiz-title-display" class="text-3xl font-bold text-center mb-2"></h2>
+            <p id="question-counter" class="text-center text-gray-500 mb-8"></p>
+            
+            <div id="question-display" class="mb-6">
+                <p class="text-xl font-semibold mb-4" id="question-text"></p>
+                <div id="options-container" class="space-y-3">
+                    <!-- Options will be injected here -->
+                </div>
+            </div>
+
+            <div id="quiz-navigation" class="flex justify-end items-center mt-8">
+                <div>
+                    <button id="next-question-btn" class="hidden px-6 py-3 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 transition-transform transform hover:scale-105 shadow-md">Next Question</button>
+                    <button id="submit-btn" class="hidden px-6 py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 transition-transform transform hover:scale-105 shadow-md">Show Results</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 3: Review Score -->
+        <div id="results-view" class="hidden bg-white p-8 rounded-xl shadow-lg text-center transition-all">
+            <h2 class="text-3xl font-bold mb-2">Quiz Complete!</h2>
+            <p class="text-lg text-gray-600 mb-6">Here's how you did:</p>
+            
+            <div class="bg-indigo-50 p-6 rounded-lg mb-8">
+                <p class="text-xl font-semibold">Your Score</p>
+                <p class="text-6xl font-bold text-indigo-600 my-2" id="score-display"></p>
+                <p class="text-gray-700" id="score-details"></p>
+            </div>
+
+            <div id="review-container" class="text-left space-y-6">
+                <!-- Review details will be injected here -->
+            </div>
+
+            <div class="flex justify-center space-x-4 mt-8">
+                <button id="create-new-quiz-btn" class="px-6 py-3 bg-gray-700 text-white font-bold rounded-lg hover:bg-gray-800 transition-transform transform hover:scale-105 shadow-md">Create New Quiz</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Alert Modal -->
+    <div id="alert-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full items-center justify-center z-50">
+        <div class="relative mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div class="mt-3 text-center">
+                <h3 class="text-lg leading-6 font-medium text-gray-900" id="alert-title">Alert</h3>
+                <div class="mt-2 px-7 py-3">
+                    <p class="text-sm text-gray-500" id="alert-message"></p>
+                </div>
+                <div class="items-center px-4 py-3">
+                    <button id="alert-ok-btn" class="px-4 py-2 bg-indigo-600 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        OK
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // View elements
+            const creationView = document.getElementById('creation-view');
+            const quizView = document.getElementById('quiz-view');
+            const resultsView = document.getElementById('results-view');
+            
+            // --- AI Elements ---
+            const aiTopicInput = document.getElementById('ai-topic');
+            const aiQuestionCountInput = document.getElementById('ai-question-count');
+            const generateAiBtn = document.getElementById('generate-ai-btn');
+            const aiBtnText = document.getElementById('ai-btn-text');
+            const aiSpinner = document.getElementById('ai-spinner');
+
+            // --- Modal Elements ---
+            const alertModal = document.getElementById('alert-modal');
+            const alertTitle = document.getElementById('alert-title');
+            const alertMessage = document.getElementById('alert-message');
+            const alertOkBtn = document.getElementById('alert-ok-btn');
+
+            // --- Quiz View Elements ---
+            const quizTitleDisplay = document.getElementById('quiz-title-display');
+            const questionCounter = document.getElementById('question-counter');
+            const questionText = document.getElementById('question-text');
+            const optionsContainer = document.getElementById('options-container');
+            const nextQuestionBtn = document.getElementById('next-question-btn');
+            const submitBtn = document.getElementById('submit-btn');
+
+            // --- Results View Elements ---
+            const scoreDisplay = document.getElementById('score-display');
+            const scoreDetails = document.getElementById('score-details');
+            const reviewContainer = document.getElementById('review-container');
+            const createNewQuizBtn = document.getElementById('create-new-quiz-btn');
+            
+            // App State
+            let quizData = [];
+            let currentQuestionIndex = 0;
+            let userAnswers = [];
+            let currentScore = 0;
+
+            // --- Modal Functions ---
+            const showAlert = (message, title = 'Alert') => {
+                alertTitle.textContent = title;
+                alertMessage.textContent = message;
+                alertModal.classList.remove('hidden');
+            };
+            alertOkBtn.addEventListener('click', () => alertModal.classList.add('hidden'));
+
+            // --- Functions for AI Generation ---
+            const handleAIGeneration = async () => {
+                const topic = aiTopicInput.value.trim();
+                const count = parseInt(aiQuestionCountInput.value);
+
+                if (!topic) {
+                    showAlert('Please enter a topic for the quiz.');
+                    return;
+                }
+                if (isNaN(count) || count < 1 || count > 10) {
+                    showAlert('Please enter a valid number of questions (1-10).');
+                    return;
+                }
+
+                aiBtnText.textContent = 'Generating...';
+                aiSpinner.classList.remove('hidden');
+                generateAiBtn.disabled = true;
+
+                const apiKey = ""; // Canvas will provide this
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+                
+                const prompt = `Generate ${count} multiple-choice quiz questions about "${topic}". For each question, provide 4 options. Ensure the "correctAnswer" value in the JSON response exactly matches one of the strings in the "options" array.`;
+
+                const payload = {
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "OBJECT",
+                            properties: {
+                                "questions": {
+                                    type: "ARRAY",
+                                    items: {
+                                        type: "OBJECT",
+                                        properties: {
+                                            "question": { "type": "STRING" },
+                                            "options": {
+                                                type: "ARRAY",
+                                                items: { "type": "STRING" }
+                                            },
+                                            "correctAnswer": { "type": "STRING" }
+                                        },
+                                        required: ["question", "options", "correctAnswer"]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`API Error: ${response.statusText}`);
+                    }
+
+                    const result = await response.json();
+                    const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (!jsonText) {
+                         throw new Error('No content received from AI.');
+                    }
+                    
+                    const generatedData = JSON.parse(jsonText);
+                    quizData = generatedData.questions;
+
+                    creationView.classList.add('hidden');
+                    quizView.classList.remove('hidden');
+                    startQuiz(topic);
+
+                } catch (error) {
+                    console.error('AI Generation Error:', error);
+                    showAlert('Failed to generate quiz. Please try again.', 'Error');
+                } finally {
+                    aiBtnText.textContent = 'Generate & Start Quiz';
+                    aiSpinner.classList.add('hidden');
+                    generateAiBtn.disabled = false;
+                }
+            };
+
+            // --- Functions for Taking Quiz ---
+            const startQuiz = (title) => {
+                currentQuestionIndex = 0;
+                userAnswers = [];
+                currentScore = 0;
+                quizTitleDisplay.textContent = title;
+                renderQuestion();
+            };
+
+            const renderQuestion = () => {
+                if (currentQuestionIndex >= quizData.length) return;
+
+                const currentQuestion = quizData[currentQuestionIndex];
+                questionCounter.textContent = `Question ${currentQuestionIndex + 1} of ${quizData.length}`;
+                questionText.textContent = currentQuestion.question;
+                optionsContainer.innerHTML = '';
+
+                currentQuestion.options.forEach((option, index) => {
+                    const optionTemplate = `
+                        <div>
+                            <input type="radio" id="option-${index}" name="quiz-option" value="${option}" class="hidden option-radio">
+                            <label for="option-${index}" class="block w-full text-left p-4 border border-gray-300 rounded-lg cursor-pointer hover:bg-indigo-50 transition-colors">
+                                ${option}
+                            </label>
+                        </div>
+                    `;
+                    optionsContainer.insertAdjacentHTML('beforeend', optionTemplate);
+                });
+
+                if (currentQuestionIndex < quizData.length - 1) {
+                    nextQuestionBtn.classList.remove('hidden');
+                    submitBtn.classList.add('hidden');
+                } else {
+                    nextQuestionBtn.classList.add('hidden');
+                    submitBtn.classList.remove('hidden');
+                }
+            };
+            
+            const handleNextQuestion = () => {
+                const selectedOptionInput = document.querySelector('input[name="quiz-option"]:checked');
+                if (!selectedOptionInput) {
+                    showAlert('Please select an answer.');
+                    return;
+                }
+                userAnswers.push(selectedOptionInput.value);
+                
+                currentQuestionIndex++;
+                if (currentQuestionIndex < quizData.length) {
+                    renderQuestion();
+                }
+            };
+            
+            const handleSubmit = () => {
+                const selectedOptionInput = document.querySelector('input[name="quiz-option"]:checked');
+                if (!selectedOptionInput) {
+                    showAlert('Please select an answer.');
+                    return;
+                }
+                userAnswers.push(selectedOptionInput.value);
+                calculateAndShowResults();
+            };
+
+            // --- Functions for Results & Review ---
+            const calculateAndShowResults = () => {
+                quizView.classList.add('hidden');
+                resultsView.classList.remove('hidden');
+                
+                currentScore = 0;
+                quizData.forEach((question, index) => {
+                    if (userAnswers[index] === question.correctAnswer) {
+                        currentScore++;
+                    }
+                });
+
+                const percentage = quizData.length > 0 ? Math.round((currentScore / quizData.length) * 100) : 0;
+                scoreDisplay.textContent = `${percentage}%`;
+                scoreDetails.textContent = `You answered ${currentScore} out of ${quizData.length} questions correctly.`;
+
+                renderReview();
+            };
+
+            const renderReview = () => {
+                reviewContainer.innerHTML = '<h3 class="text-2xl font-semibold mb-4 border-b pb-2">Review Your Answers</h3>';
+                quizData.forEach((questionData, index) => {
+                    const userAnswer = userAnswers[index];
+                    const isCorrect = userAnswer === questionData.correctAnswer;
+                    
+                    let optionsHtml = '';
+                    questionData.options.forEach(option => {
+                        if (option === questionData.correctAnswer) {
+                             optionsHtml += `<li class="font-semibold text-green-700">&#10003; ${option} (Correct Answer)</li>`;
+                        } else if (option === userAnswer) {
+                            optionsHtml += `<li class="font-normal text-red-700 line-through">&#10007; ${option} (Your Answer)</li>`;
+                        } else {
+                            optionsHtml += `<li class="text-gray-600">${option}</li>`;
+                        }
+                    });
+
+                    const reviewBlock = `
+                        <div class="p-4 rounded-lg border-l-4 ${isCorrect ? 'correct-answer' : 'incorrect-answer'}">
+                            <p class="font-bold text-lg mb-2">${index + 1}. ${questionData.question}</p>
+                            <ul class="list-none space-y-1 pl-2">
+                                ${optionsHtml}
+                            </ul>
+                        </div>
+                    `;
+                    reviewContainer.insertAdjacentHTML('beforeend', reviewBlock);
+                });
+            };
+
+            const createNewQuiz = () => {
+                quizData = []; 
+                currentQuestionIndex = 0; 
+                userAnswers = []; 
+                currentScore = 0;
+                aiTopicInput.value = '';
+                resultsView.classList.add('hidden');
+                creationView.classList.remove('hidden');
+            };
+            
+            // --- Event Listeners ---
+            nextQuestionBtn.addEventListener('click', handleNextQuestion);
+            submitBtn.addEventListener('click', handleSubmit);
+            createNewQuizBtn.addEventListener('click', createNewQuiz);
+            generateAiBtn.addEventListener('click', handleAIGeneration);
+        });
+    </script>
+</body>
+</html>
+
