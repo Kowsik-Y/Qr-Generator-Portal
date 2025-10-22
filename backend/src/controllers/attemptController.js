@@ -64,6 +64,24 @@ exports.startAttempt = async (req, res) => {
     const total_points = pointsResult.rows[0].total || 0;
     console.log('📊 Total points:', total_points);
 
+    // Check if test has random question selection enabled
+    let selectedQuestionIds = null;
+    if (test.questions_to_ask && test.questions_to_ask > 0) {
+      // Get all question IDs for this test
+      const allQuestionsResult = await db.query(
+        'SELECT id FROM questions WHERE test_id = $1 ORDER BY order_number',
+        [test_id]
+      );
+      const allQuestionIds = allQuestionsResult.rows.map(q => q.id);
+
+      if (test.questions_to_ask < allQuestionIds.length) {
+        // Randomly select questions without replacement
+        const shuffled = [...allQuestionIds].sort(() => 0.5 - Math.random());
+        selectedQuestionIds = shuffled.slice(0, test.questions_to_ask);
+        console.log(`🎲 Randomly selected ${test.questions_to_ask} questions out of ${allQuestionIds.length}`);
+      }
+    }
+
     // Check if student already has an IN-PROGRESS attempt for this test
     // Allow multiple attempts, but not multiple simultaneous in-progress attempts
     const existingAttempt = await db.query(
@@ -101,11 +119,11 @@ exports.startAttempt = async (req, res) => {
     console.log('Creating new attempt...');
     const result = await db.query(`
       INSERT INTO test_attempts (
-        test_id, student_id, platform, browser, device_info, total_points
+        test_id, student_id, platform, browser, device_info, total_points, selected_questions
       )
-      VALUES ($1, $2, $3, $4, $5, $6)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING *
-    `, [test_id, student_id, platform, browser, JSON.stringify(device_info), total_points]);
+    `, [test_id, student_id, platform, browser, JSON.stringify(device_info), total_points, selectedQuestionIds]);
 
     console.log('✅ Attempt created successfully:', result.rows[0].id);
 
@@ -193,6 +211,13 @@ exports.submitAttempt = async (req, res) => {
   try {
     const { attempt_id } = req.body;
 
+    // Get attempt details to check for selected questions
+    const attemptResult = await db.query('SELECT test_id, selected_questions FROM test_attempts WHERE id = $1', [attempt_id]);
+    if (attemptResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Attempt not found' });
+    }
+    const attempt = attemptResult.rows[0];
+
     // Calculate total score
     const scoreResult = await db.query(
       'SELECT SUM(points_earned) as score FROM student_answers WHERE attempt_id = $1',
@@ -200,26 +225,44 @@ exports.submitAttempt = async (req, res) => {
     );
     const score = scoreResult.rows[0].score || 0;
 
+    // Calculate total points based on selected questions or all questions
+    let totalPoints = 0;
+    if (attempt.selected_questions && attempt.selected_questions.length > 0) {
+      // Use selected questions for total points calculation
+      const placeholders = attempt.selected_questions.map((_, i) => `$${i + 1}`).join(',');
+      const totalPointsResult = await db.query(
+        `SELECT SUM(points) as total FROM questions WHERE id IN (${placeholders})`,
+        attempt.selected_questions
+      );
+      totalPoints = totalPointsResult.rows[0].total || 0;
+    } else {
+      // Fallback to all questions (for backward compatibility)
+      const totalPointsResult = await db.query(
+        'SELECT SUM(points) as total FROM questions WHERE test_id = $1',
+        [attempt.test_id]
+      );
+      totalPoints = totalPointsResult.rows[0].total || 0;
+    }
+
     // Update attempt
     const result = await db.query(`
       UPDATE test_attempts
-      SET status = 'submitted', score = $1, submitted_at = CURRENT_TIMESTAMP
-      WHERE id = $2
+      SET status = 'submitted', score = $1, total_points = $2, submitted_at = CURRENT_TIMESTAMP
+      WHERE id = $3
       RETURNING *
-    `, [score, attempt_id]);
+    `, [score, totalPoints, attempt_id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Attempt not found' });
     }
 
-    const attempt = result.rows[0];
-    const percentage = (score / attempt.total_points) * 100;
+    const percentage = totalPoints > 0 ? (score / totalPoints) * 100 : 0;
 
     res.json({
       message: 'Test submitted successfully',
       attempt: result.rows[0],
       score,
-      total_points: attempt.total_points,
+      total_points: totalPoints,
       percentage: Math.round(percentage)
     });
   } catch (error) {
@@ -228,14 +271,84 @@ exports.submitAttempt = async (req, res) => {
   }
 };
 
+// Mark code answer as correct after test case validation
+exports.markCodeAnswerCorrect = async (req, res) => {
+  try {
+    const { attempt_id, question_id, passed_count, total_test_cases, test_results } = req.body;
+    if (!attempt_id || !question_id) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Get question details
+    const questionResult = await db.query(
+      'SELECT * FROM questions WHERE id = $1',
+      [question_id]
+    );
+    if (questionResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Question not found' });
+    }
+    const question = questionResult.rows[0];
+    if (question.question_type !== 'code') {
+      return res.status(400).json({ error: 'Not a code question' });
+    }
+
+    // Calculate partial points based on passed test cases
+    let pointsEarned = 0;
+    if (passed_count && total_test_cases && total_test_cases > 0) {
+      const pointsPerTestCase = question.points / total_test_cases;
+      pointsEarned = passed_count * pointsPerTestCase;
+    } else {
+      // Fallback to full points if no partial scoring data provided
+      pointsEarned = question.points;
+    }
+
+    // First, ensure there's an answer record for this question
+    // If not, create one with the current code submission
+    const existingAnswer = await db.query(
+      'SELECT * FROM student_answers WHERE attempt_id = $1 AND question_id = $2',
+      [attempt_id, question_id]
+    );
+
+    if (existingAnswer.rows.length === 0) {
+      // No answer exists yet, this shouldn't happen but let's handle it
+      console.warn('No answer found for code question, creating one...');
+      await db.query(`
+        INSERT INTO student_answers (
+          attempt_id, question_id, answer, code_submission, is_correct, is_flagged, points_earned, test_results
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [attempt_id, question_id, null, '', passed_count > 0, false, pointsEarned, JSON.stringify(test_results || [])]);
+    } else {
+      // Update existing answer
+      await db.query(
+        `UPDATE student_answers
+          SET is_correct = $1, points_earned = $2, test_results = $3
+          WHERE attempt_id = $4 AND question_id = $5`,
+        [passed_count > 0, pointsEarned, JSON.stringify(test_results || []), attempt_id, question_id]
+      );
+    }
+
+    res.json({
+      message: 'Code answer marked with partial points',
+      points_awarded: pointsEarned,
+      passed_count: passed_count || 0,
+      total_test_cases: total_test_cases || 0,
+      test_results: test_results || []
+    });
+  } catch (error) {
+    console.error('Mark code answer correct error:', error);
+    res.status(500).json({ error: 'Failed to mark code answer correct' });
+  }
+};
+
 // Get attempt review
 exports.getAttemptReview = async (req, res) => {
   try {
     const { attempt_id } = req.params;
 
-    // Get attempt details
+    // Get attempt details with test info
     const attemptResult = await db.query(`
-      SELECT ta.*, t.title as test_title, t.passing_score
+      SELECT ta.*, t.title as test_title, t.passing_score, t.show_review_to_students
       FROM test_attempts ta
       JOIN tests t ON ta.test_id = t.id
       WHERE ta.id = $1 AND ta.student_id = $2
@@ -245,18 +358,68 @@ exports.getAttemptReview = async (req, res) => {
       return res.status(404).json({ error: 'Attempt not found' });
     }
 
+    const attemptData = attemptResult.rows[0];
+
+    // Check if student can view reviews
+    if (req.user.role === 'student' && !attemptData.show_review_to_students) {
+      return res.status(403).json({ error: 'Review is not available for this test' });
+    }
+
+    if (attemptResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Attempt not found' });
+    }
+
     // Get all answers with questions
     const answersResult = await db.query(`
-      SELECT sa.*, q.question_text, q.question_type, q.options, q.correct_answer, q.explanation
+      SELECT sa.*, q.question_text, q.question_type, q.options, q.correct_answer, q.explanation, q.test_cases, sa.test_results
       FROM student_answers sa
       JOIN questions q ON sa.question_id = q.id
       WHERE sa.attempt_id = $1
       ORDER BY q.order_number
     `, [attempt_id]);
 
+    // Parse JSON fields and ensure test_results is an array
+    const processedAnswers = answersResult.rows.map(answer => ({
+      ...answer,
+      options: answer.options ? (typeof answer.options === 'string' ? JSON.parse(answer.options) : answer.options) : null,
+      test_cases: answer.test_cases ? (typeof answer.test_cases === 'string' ? JSON.parse(answer.test_cases) : answer.test_cases) : null,
+      test_results: answer.test_results ? (typeof answer.test_results === 'string' ? JSON.parse(answer.test_results) : answer.test_results) : null
+    }));
+
+    // Recalculate the current score from answers (important for code questions that may be marked correct after testing)
+    const currentScore = answersResult.rows.reduce((sum, answer) => {
+      return sum + (parseFloat(answer.points_earned) || 0);
+    }, 0);
+
+    // Calculate total points based on selected questions or all questions
+    let totalPoints = 0;
+    if (attemptData.selected_questions && attemptData.selected_questions.length > 0) {
+      // Use selected questions for total points calculation
+      const placeholders = attemptData.selected_questions.map((_, i) => `$${i + 2}`).join(',');
+      const totalPointsResult = await db.query(
+        `SELECT SUM(points) as total FROM questions WHERE id IN (${placeholders})`,
+        [attemptData.test_id, ...attemptData.selected_questions]
+      );
+      totalPoints = totalPointsResult.rows[0].total || 0;
+    } else {
+      // Fallback to all questions (for backward compatibility)
+      const totalPointsResult = await db.query(
+        'SELECT SUM(points) as total FROM questions WHERE test_id = $1',
+        [attemptData.test_id]
+      );
+      totalPoints = totalPointsResult.rows[0].total || 0;
+    }
+
+    const percentage = totalPoints > 0 ? (currentScore / totalPoints) * 100 : 0;
+
     res.json({
-      attempt: attemptResult.rows[0],
-      answers: answersResult.rows
+      attempt: {
+        ...attemptData,
+        score: currentScore,
+        total_points: totalPoints, // Use recalculated total points
+        percentage: Math.round(percentage)
+      },
+      answers: processedAnswers
     });
   } catch (error) {
     console.error('Get review error:', error);
@@ -271,6 +434,11 @@ exports.getLiveAttempts = async (req, res) => {
 
     if (!test_id) {
       return res.status(400).json({ error: 'test_id is required' });
+    }
+
+    const testId = parseInt(test_id, 10);
+    if (isNaN(testId)) {
+      return res.status(400).json({ error: 'Invalid test_id' });
     }
 
     // Debug: Log user info
@@ -288,7 +456,7 @@ exports.getLiveAttempts = async (req, res) => {
       FROM tests t
       LEFT JOIN users u ON t.created_by = u.id
       WHERE t.id = $1
-    `, [test_id]);
+    `, [testId]);
 
     if (testResult.rows.length === 0) {
       return res.status(404).json({ error: 'Test not found' });
@@ -337,7 +505,7 @@ exports.getLiveAttempts = async (req, res) => {
       JOIN users u ON ta.student_id = u.id
       WHERE ta.test_id = $1
       ORDER BY ta.started_at DESC
-    `, [test_id]);
+    `, [testId]);
 
     res.json({
       attempts: attemptsResult.rows,
@@ -441,7 +609,12 @@ exports.getTestReport = async (req, res) => {
     const userRole = req.user.role;
     const userId = req.user.id;
 
-    console.log('📊 Test Report Request - Test ID:', test_id, '| User:', req.user.name, '| Role:', userRole);
+    const testId = parseInt(test_id, 10);
+    if (isNaN(testId)) {
+      return res.status(400).json({ error: 'Invalid test_id' });
+    }
+
+    console.log('📊 Test Report Request - Test ID:', testId, '| User:', req.user.name, '| Role:', userRole);
 
     // Verify user is teacher or admin
     if (userRole !== 'teacher' && userRole !== 'admin') {
@@ -455,7 +628,7 @@ exports.getTestReport = async (req, res) => {
       LEFT JOIN users u ON t.created_by = u.id
       LEFT JOIN courses c ON t.course_id = c.id
       WHERE t.id = $1
-    `, [test_id]);
+    `, [testId]);
 
     if (testResult.rows.length === 0) {
       return res.status(404).json({ error: 'Test not found' });
@@ -478,6 +651,7 @@ exports.getTestReport = async (req, res) => {
         ta.status,
         ta.score,
         ta.total_points,
+        ROUND((ta.score / NULLIF((SELECT SUM(q.points) FROM questions q WHERE q.test_id = ta.test_id), 0)::numeric) * 100, 2) as percentage,
         ta.platform,
         ta.browser,
         ta.started_at,
@@ -507,7 +681,7 @@ exports.getTestReport = async (req, res) => {
       LEFT JOIN departments d ON u.department_id = d.id
       WHERE ta.test_id = $1
       ORDER BY ta.started_at DESC
-    `, [test_id]);
+    `, [testId]);
 
     // Calculate statistics
     const attempts = attemptsResult.rows;
@@ -531,7 +705,7 @@ exports.getTestReport = async (req, res) => {
     res.json({
       test: {
         ...test,
-        question_count: await db.query('SELECT COUNT(*) FROM questions WHERE test_id = $1', [test_id]).then(r => r.rows[0].count)
+        question_count: await db.query('SELECT COUNT(*) FROM questions WHERE test_id = $1', [testId]).then(r => r.rows[0].count)
       },
       attempts,
       statistics,
@@ -554,8 +728,13 @@ exports.logViolation = async (req, res) => {
     const { violation_type, details, timestamp } = req.body;
     const student_id = req.user.id;
 
+    const attemptId = parseInt(attempt_id, 10);
+    if (isNaN(attemptId)) {
+      return res.status(400).json({ error: 'Invalid attempt_id' });
+    }
+
     console.log('⚠️ Violation Logged:', {
-      attempt_id,
+      attempt_id: attemptId,
       student_id,
       violation_type,
       details
@@ -564,7 +743,7 @@ exports.logViolation = async (req, res) => {
     // Verify the attempt belongs to this student
     const attemptResult = await db.query(
       'SELECT * FROM test_attempts WHERE id = $1 AND student_id = $2',
-      [attempt_id, student_id]
+      [attemptId, student_id]
     );
 
     if (attemptResult.rows.length === 0) {
@@ -582,7 +761,7 @@ exports.logViolation = async (req, res) => {
         attempt_id, violation_type, details, created_at
       )
       VALUES ($1, $2, $3::jsonb, $4)
-    `, [attempt_id, violation_type, detailsJson, timestamp || new Date().toISOString()]);
+    `, [attemptId, violation_type, detailsJson, timestamp || new Date().toISOString()]);
 
     // Update attempt's violation count
     // Also update specific violation type counters
@@ -599,7 +778,7 @@ exports.logViolation = async (req, res) => {
       UPDATE test_attempts 
       SET total_violations = COALESCE(total_violations, 0) + 1${specificColumn}
       WHERE id = $1
-    `, [attempt_id]);
+    `, [attemptId]);
 
     console.log('✅ Violation logged and attempt updated');
 
@@ -620,16 +799,26 @@ exports.getStudentAttempts = async (req, res) => {
     const requesting_user_id = req.user.id;
     const requesting_user_role = req.user.role;
 
+    const studentId = parseInt(student_id, 10);
+    if (isNaN(studentId)) {
+      return res.status(400).json({ error: 'Invalid student_id' });
+    }
+
+    const testId = parseInt(test_id, 10);
+    if (isNaN(testId)) {
+      return res.status(400).json({ error: 'Invalid test_id' });
+    }
+
     console.log('📊 Student Attempts Request:', {
-      student_id,
-      test_id,
+      student_id: studentId,
+      test_id: testId,
       requesting_user: requesting_user_id,
       role: requesting_user_role
     });
 
     // Access control: Student can only see their own attempts
     // Teachers/Admins can see any student's attempts (with proper test access)
-    if (requesting_user_role === 'student' && parseInt(student_id) !== requesting_user_id) {
+    if (requesting_user_role === 'student' && studentId !== requesting_user_id) {
       return res.status(403).json({ error: 'You can only view your own test attempts' });
     }
 
@@ -640,7 +829,7 @@ exports.getStudentAttempts = async (req, res) => {
         FROM tests t
         LEFT JOIN users u ON t.created_by = u.id
         WHERE t.id = $1
-      `, [test_id]);
+      `, [testId]);
 
       if (testResult.rows.length === 0) {
         return res.status(404).json({ error: 'Test not found' });
@@ -659,18 +848,18 @@ exports.getStudentAttempts = async (req, res) => {
     const attemptsResult = await db.query(`
       WITH numbered_attempts AS (
         SELECT 
-          id,
-          status,
-          score,
-          total_points,
-          ROUND((score / NULLIF(total_points, 0)::numeric) * 100, 2) as percentage,
-          platform,
-          browser,
-          started_at,
-          submitted_at,
-          ROW_NUMBER() OVER (ORDER BY started_at ASC) as attempt_number
-        FROM test_attempts
-        WHERE student_id = $1 AND test_id = $2
+          ta.id,
+          ta.status,
+          ta.score,
+          ta.total_points,
+          ROUND((ta.score / NULLIF((SELECT SUM(q.points) FROM questions q WHERE q.test_id = ta.test_id), 0)::numeric) * 100, 2) as percentage,
+          ta.platform,
+          ta.browser,
+          ta.started_at,
+          ta.submitted_at,
+          ROW_NUMBER() OVER (ORDER BY ta.started_at ASC) as attempt_number
+        FROM test_attempts ta
+        WHERE ta.student_id = $1 AND ta.test_id = $2
       )
       SELECT 
         na.*,
@@ -680,7 +869,7 @@ exports.getStudentAttempts = async (req, res) => {
       GROUP BY na.id, na.status, na.score, na.total_points, na.percentage, 
                na.platform, na.browser, na.started_at, na.submitted_at, na.attempt_number
       ORDER BY na.started_at DESC
-    `, [student_id, test_id]);
+    `, [studentId, testId]);
 
     console.log(`✅ Found ${attemptsResult.rows.length} attempts`);
 
@@ -704,8 +893,13 @@ exports.getAttemptDetail = async (req, res) => {
     const requesting_user_id = req.user.id;
     const requesting_user_role = req.user.role;
 
+    const attemptId = parseInt(attempt_id, 10);
+    if (isNaN(attemptId)) {
+      return res.status(400).json({ error: 'Invalid attempt_id' });
+    }
+
     console.log('📄 Attempt Detail Request:', {
-      attempt_id,
+      attempt_id: attemptId,
       requesting_user: requesting_user_id,
       role: requesting_user_role
     });
@@ -720,7 +914,7 @@ exports.getAttemptDetail = async (req, res) => {
           ta.status,
           ta.score,
           ta.total_points,
-          ROUND((ta.score / NULLIF(ta.total_points, 0)::numeric) * 100, 2) as percentage,
+          ROUND((ta.score / NULLIF((SELECT SUM(q.points) FROM questions q WHERE q.test_id = ta.test_id), 0)::numeric) * 100, 2) as percentage,
           ta.platform,
           ta.browser,
           ta.started_at,
@@ -741,7 +935,7 @@ exports.getAttemptDetail = async (req, res) => {
           AND ta2.id = ad.id
         ) as attempt_number
       FROM attempt_data ad
-    `, [attempt_id]);
+    `, [attemptId]);
 
     if (attemptResult.rows.length === 0) {
       return res.status(404).json({ error: 'Attempt not found' });
@@ -786,7 +980,7 @@ exports.getAttemptDetail = async (req, res) => {
       FROM test_violations
       WHERE attempt_id = $1
       ORDER BY created_at DESC
-    `, [attempt_id]);
+    `, [attemptId]);
 
     console.log(`✅ Found ${violationsResult.rows.length} violations`);
 

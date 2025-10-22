@@ -8,6 +8,7 @@ const { auth, checkRole } = require('../middleware/auth');
 router.post('/start', auth, attemptController.startAttempt);
 router.post('/answer', auth, attemptController.submitAnswer);
 router.post('/submit', auth, attemptController.submitAttempt);
+router.post('/mark-code-correct', auth, attemptController.markCodeAnswerCorrect);
 router.get('/:attempt_id/review', auth, attemptController.getAttemptReview);
 router.post('/:attempt_id/violation', auth, attemptController.logViolation);
 

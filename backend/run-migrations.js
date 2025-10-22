@@ -35,6 +35,24 @@ async function runMigrations() {
     await client.query(migration005);
     console.log('✅ Migration 005 completed\n');
 
+    // Migration 006: Add test results column
+    console.log('📝 Running migration 006: Add test results column to student_answers table');
+    const migration006 = fs.readFileSync(
+      path.join(__dirname, 'database/migrations/add_test_results.sql'),
+      'utf8'
+    );
+    await client.query(migration006);
+    console.log('✅ Migration 006 completed\n');
+
+    // Migration 007: Add randomization and review fields
+    console.log('📝 Running migration 007: Add randomization and review fields to tests and test_attempts tables');
+    const migration007 = fs.readFileSync(
+      path.join(__dirname, 'database/migrations/add_test_randomization_and_review.sql'),
+      'utf8'
+    );
+    await client.query(migration007);
+    console.log('✅ Migration 007 completed\n');
+
     console.log('🎉 All migrations completed successfully!');
     
   } catch (error) {

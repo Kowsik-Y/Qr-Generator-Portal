@@ -46,7 +46,6 @@ CREATE TABLE courses (
   teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   semester VARCHAR(20),
   academic_year VARCHAR(20),
-  credits INTEGER DEFAULT 3,
   is_active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -69,6 +68,9 @@ CREATE TABLE tests (
   allowed_browsers TEXT[], -- ['chrome', 'firefox', 'safari', 'edge']
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   is_active BOOLEAN DEFAULT TRUE,
+  -- New fields for random question selection and review visibility
+  questions_to_ask INTEGER, -- Number of questions to randomly select (null = all questions)
+  show_review_to_students BOOLEAN DEFAULT FALSE, -- Whether students can see review/answers
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -102,6 +104,8 @@ CREATE TABLE test_attempts (
   device_info JSONB,
   started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   submitted_at TIMESTAMP,
+  -- New field for random question selection
+  selected_questions INTEGER[], -- Array of question IDs randomly selected for this attempt
   UNIQUE(test_id, student_id)
 );
 

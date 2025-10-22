@@ -1,26 +1,111 @@
 const db = require('../config/database');
 
+// Get all questions (Admin only)
+exports.getAllQuestions = async (req, res) => {
+  try {
+    const { test_id, limit = 50, offset = 0 } = req.query;
+
+    let query = `
+      SELECT q.*, t.title as test_title, c.title as course_title
+      FROM questions q
+      LEFT JOIN tests t ON q.test_id = t.id
+      LEFT JOIN courses c ON t.course_id = c.id
+    `;
+
+    const params = [];
+    let paramCount = 1;
+
+    if (test_id) {
+      const testId = parseInt(test_id, 10);
+      if (isNaN(testId)) {
+        return res.status(400).json({ error: 'Invalid test_id' });
+      }
+      query += ` WHERE q.test_id = $${paramCount}`;
+      params.push(testId);
+      paramCount++;
+    }
+
+    query += ` ORDER BY q.created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+    params.push(parseInt(limit), parseInt(offset));
+
+    const result = await db.query(query, params);
+
+    // Get total count for pagination
+    let countQuery = 'SELECT COUNT(*) as total FROM questions';
+    const countParams = [];
+
+    if (test_id) {
+      const testId = parseInt(test_id, 10);
+      if (isNaN(testId)) {
+        return res.status(400).json({ error: 'Invalid test_id' });
+      }
+      countQuery += ' WHERE test_id = $1';
+      countParams.push(testId);
+    }
+
+    const countResult = await db.query(countQuery, countParams);
+
+    res.json({
+      questions: result.rows,
+      pagination: {
+        total: parseInt(countResult.rows[0].total),
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        hasMore: parseInt(offset) + parseInt(limit) < parseInt(countResult.rows[0].total)
+      }
+    });
+  } catch (error) {
+    console.error('Get all questions error:', error);
+    res.status(500).json({ error: 'Failed to fetch questions' });
+  }
+};
+
 // Get questions for a test
 exports.getQuestions = async (req, res) => {
   try {
-    const { test_id } = req.query;
+    const { test_id, attempt_id } = req.query;
 
     if (!test_id) {
       return res.status(400).json({ error: 'test_id is required' });
+    }
+
+    const testId = parseInt(test_id, 10);
+    if (isNaN(testId)) {
+      return res.status(400).json({ error: 'Invalid test_id' });
     }
 
     // Check if user is taking the test (student) or creating it (teacher)
     const isStudent = req.user.role === 'student';
 
     let query;
+    let params = [testId];
+
     if (isStudent) {
-      // Students don't see correct answers or test cases
-      query = `
-        SELECT id, test_id, question_type, question_text, code_language, options, points, order_number
-        FROM questions
-        WHERE test_id = $1
-        ORDER BY order_number ASC
-      `;
+      // Students don't see correct answers, but DO need test cases for code questions
+      // If attempt_id is provided, check for selected questions
+      if (attempt_id) {
+        const attemptId = parseInt(attempt_id, 10);
+        if (isNaN(attemptId)) {
+          return res.status(400).json({ error: 'Invalid attempt_id' });
+        }
+        query = `
+          SELECT q.id, q.test_id, q.question_type, q.question_text, q.code_language, q.options, q.points, q.order_number, q.test_cases
+          FROM questions q
+          JOIN test_attempts ta ON ta.test_id = q.test_id
+          WHERE q.test_id = $1 AND ta.id = $2 AND ta.student_id = $3
+          AND (ta.selected_questions IS NULL OR q.id = ANY(ta.selected_questions))
+          ORDER BY q.order_number ASC
+        `;
+        params = [testId, attemptId, req.user.id];
+      } else {
+        // Fallback for when no attempt_id is provided
+        query = `
+          SELECT id, test_id, question_type, question_text, code_language, options, points, order_number, test_cases
+          FROM questions
+          WHERE test_id = $1
+          ORDER BY order_number ASC
+        `;
+      }
     } else {
       // Teachers/admins see everything
       query = `
@@ -31,7 +116,7 @@ exports.getQuestions = async (req, res) => {
       `;
     }
 
-    const result = await db.query(query, [test_id]);
+    const result = await db.query(query, params);
 
     res.json({ questions: result.rows });
   } catch (error) {
@@ -55,14 +140,22 @@ exports.createQuestion = async (req, res) => {
       points
     } = req.body;
 
-    if (!test_id || !question_type || !question_text || !correct_answer) {
+    // For coding questions, correct_answer is not required since test_cases determine correctness
+    const isCodingQuestion = question_type === 'code';
+    
+    if (!test_id || !question_type || !question_text || (!isCodingQuestion && !correct_answer)) {
       return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const testId = parseInt(test_id, 10);
+    if (isNaN(testId)) {
+      return res.status(400).json({ error: 'Invalid test_id' });
     }
 
     // Get next order number
     const orderResult = await db.query(
       'SELECT COALESCE(MAX(order_number), 0) + 1 as next_order FROM questions WHERE test_id = $1',
-      [test_id]
+      [testId]
     );
     const order_number = orderResult.rows[0].next_order;
 
@@ -74,8 +167,8 @@ exports.createQuestion = async (req, res) => {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `, [
-      test_id, question_type, question_text, code_language,
-      JSON.stringify(options), correct_answer,
+      testId, question_type, question_text, code_language,
+      JSON.stringify(options), correct_answer || null,
       JSON.stringify(test_cases), explanation,
       points || 1, order_number
     ]);

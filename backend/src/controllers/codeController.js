@@ -84,10 +84,14 @@ exports.testCode = async (req, res) => {
 
           const result = vm.run(code);
           if (result !== undefined) {
-            output = String(result).trim();
+            output = String(result);
           }
 
-          passed = output === expected_output.trim();
+          // Normalize line endings and trim both outputs
+          const normalize = (str) => (str || '').replace(/\r\n|\r/g, '\n').trimEnd();
+          const actual = normalize(output);
+          const expected = normalize(expected_output);
+          passed = actual === expected;
         }
       } catch (err) {
         error = err.message;
@@ -96,7 +100,7 @@ exports.testCode = async (req, res) => {
       results.push({
         input,
         expected_output,
-        actual_output: output.trim(),
+        actual_output: (output || '').replace(/\r\n|\r/g, '\n').trimEnd(),
         passed,
         error
       });

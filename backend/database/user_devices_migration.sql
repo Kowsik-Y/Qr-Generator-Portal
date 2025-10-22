@@ -23,12 +23,6 @@ VALUES
   ('max_devices_per_user', '3', 'Maximum number of devices a user can be logged in from simultaneously', 'security', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT (key) DO NOTHING;
 
--- Insert some sample device data for testing
-INSERT INTO user_devices (user_id, device_name, device_type, browser, os, ip_address, user_agent, last_active) VALUES
-(1, 'iPhone 13', 'mobile', 'Safari', 'iOS 16', '192.168.1.100', 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)', NOW() - INTERVAL '5 minutes'),
-(1, 'MacBook Pro', 'desktop', 'Chrome', 'macOS', '192.168.1.101', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', NOW() - INTERVAL '1 hour'),
-(2, 'Windows PC', 'desktop', 'Edge', 'Windows 11', '192.168.1.102', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', NOW() - INTERVAL '2 hours'),
-(2, 'Android Phone', 'mobile', 'Chrome', 'Android 13', '192.168.1.103', 'Mozilla/5.0 (Linux; Android 13)', NOW() - INTERVAL '30 minutes');
 
 COMMENT ON TABLE user_devices IS 'Tracks user login devices and sessions';
 COMMENT ON COLUMN user_devices.device_name IS 'Friendly name for the device (e.g., iPhone 13, MacBook Pro)';

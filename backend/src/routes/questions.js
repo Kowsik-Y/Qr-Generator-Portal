@@ -3,6 +3,9 @@ const router = express.Router();
 const questionController = require('../controllers/questionController');
 const { auth, checkRole } = require('../middleware/auth');
 
+// Get all questions (Admin only)
+router.get('/all', auth, checkRole('admin'), questionController.getAllQuestions);
+
 // Get questions
 router.get('/', auth, questionController.getQuestions);
 

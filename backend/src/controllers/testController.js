@@ -81,7 +81,9 @@ exports.createTest = async (req, res) => {
       max_attempts,
       detect_window_switch,
       prevent_screenshot,
-      detect_phone_call
+      detect_phone_call,
+      questions_to_ask,
+      show_review_to_students
     } = req.body;
 
     if (!title || !quiz_type || !test_type || !duration_minutes) {
@@ -99,15 +101,17 @@ exports.createTest = async (req, res) => {
         course_id, title, description, quiz_type, test_type,
         duration_minutes, start_time, end_time, passing_score,
         platform_restriction, allowed_browsers, created_by,
-        max_attempts, detect_window_switch, prevent_screenshot, detect_phone_call
+        max_attempts, detect_window_switch, prevent_screenshot, detect_phone_call,
+        questions_to_ask, show_review_to_students
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       RETURNING *
     `, [
       course_id, title, description, quiz_type, test_type,
       duration_minutes, startTime, endTime, passing_score,
       platform_restriction, allowed_browsers, createdBy,
-      max_attempts, detect_window_switch, prevent_screenshot, detect_phone_call
+      max_attempts, detect_window_switch, prevent_screenshot, detect_phone_call,
+      questions_to_ask, show_review_to_students
     ]);
 
     res.status(201).json({
