@@ -130,18 +130,6 @@ const registerDevice = async (userId, req) => {
   try {
     const userAgent = req.headers['user-agent'] || 'Unknown';
     const ipAddress = getIpAddress(req);
-    
-    // Debug logging
-    console.log('📱 Device Registration:', {
-      userId,
-      userAgent,
-      ipAddress,
-      headers: {
-        'user-agent': req.headers['user-agent'],
-        'x-forwarded-for': req.headers['x-forwarded-for']
-      }
-    });
-    
     const deviceInfo = parseUserAgent(userAgent);
     const deviceName = generateDeviceName(deviceInfo);
     
